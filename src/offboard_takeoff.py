@@ -1,3 +1,4 @@
+import math
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import ReliabilityPolicy, QoSProfile
@@ -25,8 +26,18 @@ class Offboard(Node):
         m.position = True
         self.pub_mode.publish(m)
 
+        t = self.n * 0.1
+        radius = 5.0
+        omega = 0.5
+        cx, cy = 0.0, 0.0
+        altitude = 5.0
+
+        x = cx + radius * math.cos(omega * t)
+        y = cy + radius * math.sin(omega * t)
+        z = -altitude
+
         s = TrajectorySetpoint()
-        s.position = [0.0, 0.0, -5.0]
+        s.position = [x, y, z]
         self.pub_set.publish(s)
 
         if self.n == 20:
