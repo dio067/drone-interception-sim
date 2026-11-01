@@ -199,7 +199,6 @@ class Chase(Node):
 
         dx = aim_x - hx
         dy = aim_y - hy
-
         dist = math.hypot(dx, dy) or 1e-6
 
         desired_speed = min(hunter_speed, KP * dist)
@@ -207,7 +206,7 @@ class Chase(Node):
         self.hunter.fly(dx / dist * desired_speed, dy / dist * desired_speed)
 
         if gap <= STOP_DISTANCE:
-            self.stop_at = ((t.x, t.y), (hx, hy))
+            self.stop_at = ((t.x, t.y), (self.hunter.pos.x, self.hunter.pos.y))
             self.phase = "stopped"
 
 
