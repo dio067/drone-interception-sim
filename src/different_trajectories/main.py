@@ -1,4 +1,5 @@
 import math
+import os
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -12,31 +13,15 @@ from px4_msgs.msg import (
 TRAJECTORY = "straight"
 
 ALTITUDE = 10.0
-OMEGA = 0.15
-ZIG_PERIOD = 4.0
-TARGET_SCHEDULE = [
-    (0, 10, 1.5),
-    (10, 20, 2.0),
-    (20, 30, 3.0),
-    (30, 40, 1.0),
-]
-HUNTER_SCHEDULE = [
-    (0, 10, 2.0),
-    (10, 20, 3.0),
-    (20, 30, 4.0),
-    (30, 40, 5.0),
-]
+OMEGA = 0.4
+ZIG_PERIOD = 3.0
+TARGET_SPEED = 2.0
+HUNTER_SPEED = 2.5
 KP = 0.8
-STOP_DISTANCE = 2.0
+STOP_DISTANCE = 4.0
+TIMEOUT = 60.0
 TOPIC = "fmu/out/vehicle_local_position_v1"
 NAN = float("nan")
-
-
-def get_speed(elapsed_time, schedule):
-    for start, end, speed in schedule:
-        if start <= elapsed_time < end:
-            return speed
-    return schedule[-1][2]
 
 
 def direction(elapsed):
@@ -44,7 +29,7 @@ def direction(elapsed):
         a = OMEGA * elapsed
         return math.sin(a), math.cos(a)
     if TRAJECTORY == "zigzag":
-        return (0.6 if int(elapsed // ZIG_PERIOD) % 2 else -0.6), 0.8
+        return (0.7 if int(elapsed // ZIG_PERIOD) % 2 else -0.7), 0.7
     return 0.0, 1.0
 
 
@@ -125,6 +110,7 @@ class Chase(Node):
         self.ticks = 0
         self.offset = None
         self.stop_at = None
+        self.min_gap = float("inf")
         self.create_timer(0.1, self.loop)
 
     def loop(self):
@@ -190,33 +176,40 @@ class Chase(Node):
             self.chase_start_time = self.get_clock().now()
             self.get_logger().info("both at altitude, chase starts")
 
+    def finish(self, result, elapsed, gap):
+        t = self.target.pos
+        self.stop_at = ((t.x, t.y), (self.hunter.pos.x, self.hunter.pos.y))
+        self.phase = "stopped"
+        self.get_logger().info(
+            f"{result.upper()} | time {elapsed:.1f} s | closest gap {self.min_gap:.2f} m"
+        )
+
     def chase(self):
         t = self.target.pos
         elapsed = (self.get_clock().now() - self.chase_start_time).nanoseconds / 1e9
 
-        target_speed = get_speed(elapsed, TARGET_SCHEDULE)
-        hunter_speed = get_speed(elapsed, HUNTER_SCHEDULE)
         dn, de = direction(elapsed)
-        self.target.fly(dn * target_speed, de * target_speed)
+        self.target.fly(dn * TARGET_SPEED, de * TARGET_SPEED)
 
         hx, hy = self.hunter_xy()
         gap = self.gap()
+        self.min_gap = min(self.min_gap, gap)
 
-        time_to_reach = gap / hunter_speed
+        time_to_reach = gap / HUNTER_SPEED
         aim_x = t.x + t.vx * time_to_reach
         aim_y = t.y + t.vy * time_to_reach
 
         dx = aim_x - hx
         dy = aim_y - hy
         dist = math.hypot(dx, dy) or 1e-6
-        desired_speed = min(hunter_speed, KP * dist)
+        desired_speed = min(HUNTER_SPEED, KP * dist)
 
         self.hunter.fly(dx / dist * desired_speed, dy / dist * desired_speed)
 
         if gap <= STOP_DISTANCE:
-            self.stop_at = ((t.x, t.y), (self.hunter.pos.x, self.hunter.pos.y))
-            self.phase = "stopped"
-            self.get_logger().info("within 2 m: both drones stopped")
+            self.finish("caught", elapsed, gap)
+        elif elapsed > TIMEOUT:
+            self.finish("timeout", elapsed, gap)
 
 
 def main():

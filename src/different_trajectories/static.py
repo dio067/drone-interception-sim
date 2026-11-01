@@ -9,15 +9,15 @@ from px4_msgs.msg import (
     VehicleCommand,
 )
 
-TRAJECTORY = "straight"
+TRAJECTORY = "circle"
 
 ALTITUDE = 10.0
-OMEGA = 0.15
-ZIG_PERIOD = 4.0
-TARGET_SPEED = 1.5
-HUNTER_SPEED = 3.0
-KP = 0.8
-STOP_DISTANCE = 2.0
+OMEGA = 0.4
+ZIG_PERIOD = 3.0
+TARGET_SPEED = 2.0
+HUNTER_SPEED = 2.5
+KP = 1.5
+STOP_DISTANCE = 4.0
 TOPIC = "fmu/out/vehicle_local_position_v1"
 NAN = float("nan")
 
@@ -27,7 +27,7 @@ def direction(elapsed):
         a = OMEGA * elapsed
         return math.sin(a), math.cos(a)
     if TRAJECTORY == "zigzag":
-        return (0.6 if int(elapsed // ZIG_PERIOD) % 2 else -0.6), 0.8
+        return (0.7 if int(elapsed // ZIG_PERIOD) % 2 else -0.7), 0.7
     return 0.0, 1.0
 
 
@@ -104,11 +104,19 @@ class Chase(Node):
         self.target = Drone(self, "/uav_1", 2)
         self.hunter = Drone(self, "/uav_2", 3)
         self.chase_start_time = None
+        self.end_elapsed = None
         self.phase = "takeoff"
         self.ticks = 0
         self.offset = None
         self.stop_at = None
         self.create_timer(0.1, self.loop)
+
+    def elapsed(self):
+        if self.chase_start_time is None:
+            return 0.0
+        if self.end_elapsed is not None:
+            return self.end_elapsed
+        return (self.get_clock().now() - self.chase_start_time).nanoseconds / 1e9
 
     def loop(self):
         if self.target.pos is None or self.hunter.pos is None:
@@ -130,8 +138,9 @@ class Chase(Node):
 
         if self.ticks % 10 == 0:
             self.get_logger().info(
-                f"{self.phase} | alt {self.target.altitude():.1f} / "
-                f"{self.hunter.altitude():.1f} | gap {self.gap():.1f} m"
+                f"{self.phase} | time {self.elapsed():.1f} s | "
+                f"alt {self.target.altitude():.1f} / {self.hunter.altitude():.1f} | "
+                f"gap {self.gap():.1f} m"
             )
 
     def find_offset(self):
@@ -175,7 +184,7 @@ class Chase(Node):
 
     def chase(self):
         t = self.target.pos
-        elapsed = (self.get_clock().now() - self.chase_start_time).nanoseconds / 1e9
+        elapsed = self.elapsed()
 
         dn, de = direction(elapsed)
         self.target.fly(dn * TARGET_SPEED, de * TARGET_SPEED)
@@ -195,9 +204,13 @@ class Chase(Node):
         self.hunter.fly(dx / dist * desired_speed, dy / dist * desired_speed)
 
         if gap <= STOP_DISTANCE:
+            self.end_elapsed = elapsed
             self.stop_at = ((t.x, t.y), (self.hunter.pos.x, self.hunter.pos.y))
             self.phase = "stopped"
-            self.get_logger().info("within 2 m: both drones stopped")
+            self.get_logger().info(
+                f"CAUGHT | time {elapsed:.1f} s | gap {gap:.1f} m | "
+                f"alt {self.target.altitude():.1f} / {self.hunter.altitude():.1f}"
+            )
 
 
 def main():
